@@ -1,122 +1,80 @@
-import matplotlib.pyplot as plt
 import pandas as pd
 import requests
 
 DRAFT_ID = 522458773321240576
 LEAGUE_ID = 522458773317046272
+TEAMS_PER_ROUND = 12
 
 def get_draft_picks(draft_id = DRAFT_ID):
     url = f'https://api.sleeper.app/v1/draft/{draft_id}/picks'
-    response = requests.get(url)
+    response = requests.get(url, timeout = 30)
     response.raise_for_status()
     return response.json()
 
 def get_rosters(league_id = LEAGUE_ID):
     url = f'https://api.sleeper.app/v1/league/{league_id}/rosters'
-    response = requests.get(url)
+    response = requests.get(url, timeout = 30)
     response.raise_for_status()
     return response.json()
 
-def build_draft_dataframe(picks, rosters):
-    roster_points = {}
+def build_draft_dataframe(picks, rosters, teams_per_round = TEAMS_PER_ROUND):
+    roster_results = {}
 
     for roster in rosters:
         roster_id = roster['roster_id']
-        points = roster['settings']['fpts']
-        roster_points[roster_id] = points
+        settings = roster.get('settings', {})
+
+        roster_results[roster_id] = {"team_points": settings.get("fpts"),
+            "potential_points": settings.get("ppts"),
+            "team_wins": settings.get("wins"),
+            "team_losses": settings.get("losses")}
 
     rows = []
 
     for pick in picks:
         roster_id = pick['roster_id']
-        metadata = pick['metadata']
+        metadata = pick.get('metadata', {})
+        results = roster_results.get(roster_id, {})
 
-        rows.append({"pick_no": pick["pick_no"],
-            "round": pick["round"],
-            "player": metadata["first_name"] + " " + metadata["last_name"],
-            "position": metadata["position"],
-            "roster_id": roster_id,
-            "team_points": roster_points.get(roster_id)})
+        first_name = metadata.get("first_name", "")
+        last_name = metadata.get("last_name", "")
+        player_name = f"{first_name} {last_name}".strip()
 
-    return pd.DataFrame(rows)
+        rows.append(
+            {
+                "pick_no": pick["pick_no"],
+                "pick_in_round": ((pick["pick_no"] - 1) % teams_per_round) + 1,
+                "round": pick["round"],
+                "player_id": pick.get("player_id"),
+                "player": player_name,
+                "position": metadata.get("position"),
+                "roster_id": roster_id,
+                "team_points": results.get("team_points"),
+                "potential_points": results.get("potential_points"),
+                "team_wins": results.get("team_wins"),
+                "team_losses": results.get("team_losses"),
+            }
+        )
 
-def load_draft_dataframe():
-    picks = get_draft_picks()
-    rosters = get_rosters()
-    return build_draft_dataframe(picks, rosters)
+    df = pd.DataFrame(rows)
 
-# # print(picks[0]) - look for 'roster_id' in both outputs -> use that to link pick number and total points acquired
-# # for pick in picks:
-# #     print(pick['metadata']['first_name'], pick['metadata']['last_name'], pick['metadata']['position'])
+    df["pick_group"] = pd.cut(
+        df["pick_in_round"],
+        bins=[0, 4, 8, teams_per_round],
+        labels=["Early", "Middle", "Late"],
+        include_lowest=True,
+    )
 
-# # print(response2.status_code) - prints 200
-# # print(rosters[0]) - look for 'roster_id' in both outputs -> use that to link pick number and total points acquired
+    return df
 
-# # fpts: actual points the team got in total
-# # ppts: highest total score a team could have gotten if the team had their highest scoring team in each week
+def load_draft_dataframe(draft_id = DRAFT_ID, league_id = LEAGUE_ID,
+                         teams_per_round = TEAMS_PER_ROUND):
+    
+    picks = get_draft_picks(draft_id)
+    rosters = get_rosters(league_id)
+    return build_draft_dataframe(picks, rosters, teams_per_round)
 
-# roster_points = {}
-# for roster in rosters:
-#     r_id = roster["roster_id"]
-#     points = roster["settings"]["fpts"]
-#     roster_points[r_id] = points
-
-# rows = []
-# for pick in picks:
-#     r_id = pick["roster_id"]
-#     player_name = pick["metadata"]["first_name"] + " " + pick["metadata"]["last_name"]
-#     position = pick["metadata"]["position"]
-#     pick_no = pick["pick_no"]
-#     round_no = pick['round']
-#     pick_number = pick['pick_no']
-#     team_points = roster_points.get(r_id, None)
-
-#     rows.append({
-#         "pick_no": pick_no,
-#         "round": round_no,
-#         "player": player_name,
-#         "position": position,
-#         "roster_id": r_id,
-#         "team_points": team_points
-#     })
-
-# for row in rows:
-#     print(f"{row['player']}: Round {row['round']}, Pick: {row['pick_no']}")
-
-# # Start of the analysis
-
-# df = pd.DataFrame(rows)
-# print(df)
-# # print(df.head())
-# # print(df.shape)
-
-# df = df.dropna(subset = ['team_points'])
-
-# # does higher pick number correspond to a higher amount of points
-# correlation = df['pick_no'].corr(df['team_points'])
-# print('Correlation between pick number and total team points:', round(correlation, 5))
-
-# # average team points by round
-# round_avg = df.groupby('round')['team_points'].mean()
-# print(round_avg)
-
-# # average team points based on position drafted
-# position_avg = df.groupby('position')['team_points'].mean().sort_values(ascending=False)
-# print(position_avg)
-
-
-# # Beginning of Visualizations
-
-# # round_avg.plot(kind = 'bar', title = 'Average Team Points by Draft Round')
-# # plt.xlabel('Round Drafted')
-# # plt.ylabel('Average Team Points')
-# # plt.tight_layout()
-# # plt.show()
-
-# plt.scatter(df['pick_no'], df['team_points'])
-# plt.xlabel('Pick Number')
-# plt.ylabel('Team Points')
-# plt.title("Draft Pick Number vs. Total Team Points")
-# plt.tight_layout()
-# plt.show()
-
+if __name__ == "__main__":
+    draft_df = load_draft_dataframe()
+    print(draft_df.head())
+    print(f"\nRows: {len(draft_df)}")
